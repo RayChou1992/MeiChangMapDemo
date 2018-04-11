@@ -1,5 +1,6 @@
 package com.example.ray.meichangmapdemo;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
@@ -7,13 +8,13 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
+import android.os.Handler;
+import android.os.Message;
 import android.util.Log;
 import android.view.View;
-import android.widget.ListView;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,30 +26,38 @@ public class MyMeiChangMapView extends View {
     Resources r;
     Bitmap bmp, bmp_doulj, bmp_doulj_yb, bmp_ylj;
     int bg_width, bg_height;
-    Rect mSrcRect, mDestRect;
 
-    //横向缩放比例
-    double scaleWidth;
-    //纵向缩放比例
-    double scaleHeight;
 
     //为使图片居中，导致的高度差。
     int distanceHeight;
 
     //图片的偏转角度
-    double angle, meidAngle, jspAngle;
-    //左偏移
+    double angle, meidAngle, meidAngle1, jspAngle;
+    //汽车沟左偏移
     double carLeft;
+    //火车沟左偏移
+    double TrainLeft;
+
+    //分辨率系数
+    int fenbianlvNum;
+
+    int isMultiple = 0;
+    boolean isTurn = false;
+    Handler handler;
+    //标识是否已经获取了宽高
+    boolean haveMeasured = false;
 
 
     public MyMeiChangMapView(Context context) {
         super(context);
     }
 
-    public MyMeiChangMapView(Context context, MeiChangMapBean mapBean) {
+    @SuppressLint("ResourceType")
+    public MyMeiChangMapView(Context context, Handler handler) {
         super(context);
         this.mapBean = mapBean;
         this.context = context;
+        this.handler = handler;
         initBitMap();
     }
 
@@ -58,8 +67,23 @@ public class MyMeiChangMapView extends View {
         bg_width = bmp.getWidth();
         bg_height = bmp.getHeight();
         Log.e("tag", "底图的宽高为：" + bg_width + "," + bg_height);
+        fenbianlvNum = bg_height / 239;
 
+        if ((isMultiple == 14 || isTurn) && isMultiple > 1) {
+            isTurn = true;
+            isMultiple--;
+        } else if (isMultiple == 1) {
+            isTurn = false;
+            isMultiple++;
+        } else {
+            isMultiple++;
+        }
 
+    }
+
+    public void setData(MeiChangMapBean meiChangMapBean) {
+        this.mapBean = meiChangMapBean;
+        haveMeasured = true;
     }
 
     @Override
@@ -67,9 +91,13 @@ public class MyMeiChangMapView extends View {
         super.onDraw(canvas);
         Paint p = new Paint();
 
+        if (!haveMeasured) {
+            drawBG(canvas, p);
+        } else {
+            drawBG(canvas, p);
+            drawYard(canvas, p, mapBean.getMc());
+        }
 
-        drawBG(canvas, p);
-        drawYard(canvas, p, mapBean.getMc());
 
     }
 
@@ -91,13 +119,19 @@ public class MyMeiChangMapView extends View {
          */
         distanceHeight = (cvsHeight - bg_height) / 2;
 
-        canvas.save();
+        Log.e("tag", distanceHeight + "高度差");
         canvas.drawBitmap(bmp, new Rect(0, 0, bg_width, bg_height), new Rect(0, distanceHeight, cvsWidth, distanceHeight + bg_height), p);
         Log.e("tag", "最终的宽高为：" + canvas.getWidth() + "," + ((canvas.getHeight() - bg_height) / 2 + bg_height));
-        canvas.restore();
 
-        scaleWidth = (double) bg_width / (double) cvsWidth;
-        scaleHeight = 1;
+        if (!haveMeasured) {
+            Message msg = handler.obtainMessage();
+            msg.what = 1;
+            msg.obj = new MeiChangMapParameter(bg_width, bg_height, distanceHeight, cvsWidth, cvsHeight);
+            handler.sendMessage(msg);
+
+        }
+
+
     }
 
 
@@ -105,12 +139,12 @@ public class MyMeiChangMapView extends View {
      * 绘制煤场图和煤堆及其名称
      * <p>
      * 1、获取煤场图时，需要传递地图的宽高，约定了一个算法：
-     * width=  canvas.width - ((canvas.width - translateX) * 0.3934681181959565) - translateX - ((canvas.width - translateX) * 0.0139968895800933)
+     * width=  canvas.width - ((canvas.width - translateX) * 0.3934681181959565) - translateX - ((canvas.width - translateX) * 0.0139968895800933)（此处如果宽度*系数，则第三步中的不再需要）
      * height= canvas.height和底图的height中较小值
      * <p>
      * 2、绘制煤场图时，需要将地图整体下移Y值，使其垂直居中显示
      * <p>
-     * 3、在画各煤堆时，需要将得到的宽度*系数，这个系数=（1-0.3934681181959565-0.0139968895800933）=0.5925349922239502;
+     * 3、在画各煤堆时，需要将得到的宽度*系数，这个系数=（1-0.3934681181959565-0.0139968895800933）=0.5925349922239502;(与第1步中的宽度*系数，只需要有一个即可)
      * <p>
      * 4、在画各煤堆时，需要将得到的高度+第2步中的Y值，即为：(canvas.getHeight() - bg_height) / 2
      * <p>
@@ -121,10 +155,14 @@ public class MyMeiChangMapView extends View {
      */
     private void drawYard(Canvas canvas, Paint p, MeiChangMapBean.McBean mcBean) {
         //偏移角度
-        angle = Math.atan((canvas.getWidth() * 0.3934681181959565 - canvas.getWidth() * 0.0388802488335925) / bg_height) / Math.PI * 180;
+        angle = Math.atan((canvas.getWidth() * 0.3934681181959565 - canvas.getWidth() * 0.0388802488335925) / (bg_height)) / Math.PI * 180;
         //煤堆偏移的角度
         meidAngle = Math.tan(angle * 0.017453292519943);
-        jspAngle = Math.tan((90 - angle) * 0.017453292519943);
+        //斗轮机偏移角度，
+
+
+        meidAngle1 = Math.tan(Math.atan((canvas.getWidth() * 0.3934681181959565 - canvas.getWidth() * 0.0388802488335925) / (bg_height / fenbianlvNum)) / Math.PI * 180 * 0.017453292519943);
+        jspAngle = Math.tan((90 - Math.atan((canvas.getWidth() * 0.3934681181959565 - canvas.getWidth() * 0.0388802488335925) / (bg_height / 2)) / Math.PI * 180) * 0.017453292519943);
         Log.e("tag", "角度：" + angle + "," + meidAngle);
 
         double total = Double.valueOf(mapBean.getCoalData().get一期());
@@ -138,11 +176,12 @@ public class MyMeiChangMapView extends View {
             double tYd = mdLists.get(0).getYU();
             double h = mdListBean.getAmount() / (((tXd - tXa) * (tYa - tYd)) * (total / (mcBean.getYD() * mcBean.getXU() * 5)));
 
+            //这里图片的宽度本身为643，1080的分辨率下是1286，但此处减法都需要减去643.如果图片宽度变化，也需要改变
 
-            draw3D(bg_width - canvas.getWidth() + (mdListBean.getXD()) * 0.5925349922239502, mdListBean.getYD() + distanceHeight,
-                    bg_width - canvas.getWidth() + (mdListBean.getXR()) * 0.5925349922239502, mdListBean.getYR() + distanceHeight,
-                    bg_width - canvas.getWidth() + (mdListBean.getXU()) * 0.5925349922239502, mdListBean.getYU() + distanceHeight,
-                    bg_width - canvas.getWidth() + (mdListBean.getXL()) * 0.5925349922239502, mdListBean.getYL() + distanceHeight,
+            draw3D(Math.abs(canvas.getWidth() - 643) + mdListBean.getXD(), mdListBean.getYD() + distanceHeight,
+                    Math.abs(canvas.getWidth() - 643) + mdListBean.getXR(), mdListBean.getYR() + distanceHeight,
+                    Math.abs(canvas.getWidth() - 643) + mdListBean.getXU(), mdListBean.getYU() + distanceHeight,
+                    Math.abs(canvas.getWidth() - 643) + mdListBean.getXL(), mdListBean.getYL() + distanceHeight,
                     h, meidAngle, mcBean, mdListBean, canvas
             );
         }
@@ -171,6 +210,8 @@ public class MyMeiChangMapView extends View {
      */
     private void draw3D(double Xa, double Ya, double Xb, double Yb, double Xc, double Yc, double Xd, double Yd, double h, double meidAngle, MeiChangMapBean.McBean mcBean, MeiChangMapBean.MdListBean mdListBean, Canvas canvas) {
         carLeft = canvas.getWidth() * 0.0388802488335925;
+        TrainLeft = canvas.getWidth() * 0.3934681181959565;
+        Log.e("tag", "火车沟left" + TrainLeft);
         //计算顶面4个点的坐标
         double dXa = Xa + h * 1 / Math.tan(70 * 0.017453292519943);
         double dYa = Ya - h * 1 / Math.tan(70 * 0.017453292519943);
@@ -232,12 +273,12 @@ public class MyMeiChangMapView extends View {
         path.lineTo((float) (tdXd), (float) tdYd);
         path.lineTo((float) (tdXa), (float) tdYa);
 
-        canvas.save();
         canvas.drawPath(path, p);
 
         //绘制煤堆名称
         float x = (float) (tdXb - ((tdXb - tdXa) / 2));
         float y = (float) (tYa - 20);
+        canvas.save();
 
         p.setColor(Color.RED);
         canvas.drawText(mdListBean.getName(), x, y, p);
@@ -265,47 +306,38 @@ public class MyMeiChangMapView extends View {
                 bmp_doulj_yb = getImageFromAssetsFile("home/doulj/yb_h.png");
 
             }
+//            if (doulj.getCourse() != null) {
+//                bmp_doulj = BitmapFactory.decodeResource(r, R.mipmap.dlj_ic);
+//                bmp_doulj_yb = BitmapFactory.decodeResource(r, R.mipmap.yb);
+//            } else {
+//                bmp_doulj = BitmapFactory.decodeResource(r, R.mipmap.dlj_h);
+//                bmp_doulj_yb = BitmapFactory.decodeResource(r, R.mipmap.yb_h);
+//
+//            }
 
-            double dX = doulj.getLng() + (mcBean.getYD() - doulj.getLat()) * meidAngle + carLeft;  // angle x
-            double dY = doulj.getLat();                                  // angle y
-//            dX = dX + translateX;
-//            dY = dY + translateY;
+            //2是不同屏幕分辨率对于像素点的一个关系，1080的分辨率下，屏幕宽度=图片宽度*2，在计算此处X时，需要还原，故需要除以meiAndle1
+            double dX = doulj.getLng() + (mcBean.getYD() - doulj.getLat()) * meidAngle1 + carLeft;  // angle x
+            double dY = doulj.getLat();          // angle y
 
 
-            canvas.save();
-            canvas.translate((float) dX, (float) dY);
-            canvas.translate(-(float) dX, -(float) dY);
-
-            canvas.drawBitmap(bmp_doulj,
-                    (float) ((dX - canvas.getWidth() * 0.0241581259150805) * 0.5925349922239502),
-                    (float) (dY - canvas.getHeight() * 0.0286458333333333) + distanceHeight,
-                    p);
-            canvas.restore();
+            float dlj_left = (float) ((dX - (canvas.getWidth() + Math.abs(canvas.getWidth() - 643)) * 0.0241581259150806) * 0.5925349922239502);
+            float dlj_top = (float) (dY - canvas.getHeight() * 0.0286458333333333) + distanceHeight + bmp_doulj.getHeight() / 2;
+            canvas.drawBitmap(bmp_doulj, dlj_left, dlj_top, p);
 
 
             //绘制斗轮机的摇臂
-            double angle = (doulj.getCourseAngle() - 90) * Math.PI / 180;
+            double angle = (doulj.getCourseAngle() - 90);
             canvas.save();
-//            Matrix matrix = new Matrix();
-//            matrix.postTranslate((float) ((dX - canvas.getWidth() * 0.0241581259150806) * 0.5925349922239502),
-//                    (float) ((dX - canvas.getWidth() * 0.0241581259150806) * 0.5925349922239502));//步骤1
-//            matrix.postRotate((float) angle);//步骤2
-////            matrix.postTranslate((float) -((dX - canvas.getWidth() * 0.0241581259150806) * 0.5925349922239502),
-////
-////                    (float) -(dY - canvas.getHeight() * 0.0095486111111112) + distanceHeight);
-//
-//            canvas.drawBitmap(bmp_doulj_yb, matrix, p);//步骤4
-//            matrix.reset();
-//            canvas.translate((float) (float) ((dX - canvas.getWidth() * 0.0241581259150806) * 0.5925349922239502), (float) (dY - canvas.getHeight() * 0.0095486111111112) + distanceHeight);
-//            if (doulj.getCourse() != null) {
-////                canvas.rotate((float) (doulj.getCourseAngle() - 90),(float) ((dX - canvas.getWidth() * 0.0241581259150806) * 0.5925349922239502),(float) (dY - canvas.getHeight() * 0.0095486111111112) + distanceHeight);
-//                canvas.rotate((float) angle);
-//            }
-//            canvas.translate(-(float) ((dX - canvas.getWidth() * 0.0241581259150806) * 0.5925349922239502), -(float) (dY - canvas.getHeight() * 0.0095486111111112) + distanceHeight);
-            canvas.drawBitmap(bmp_doulj_yb,
-                    (float) ((dX - canvas.getWidth() * 0.0241581259150806) * 0.5925349922239502),
-                    (float) (dY - canvas.getHeight() * 0.0095486111111112) + distanceHeight,
-                    p);
+
+            float yb_left = (float) ((dX - (canvas.getWidth() + Math.abs(canvas.getWidth() - 643)) * 0.0241581259150806) * 0.5925349922239502);
+            float yb_top = (float) (dY - canvas.getHeight() * 0.0095486111111112) + distanceHeight + bmp_doulj.getHeight() / 2;
+
+            canvas.translate(yb_left, yb_top);
+            if (doulj.getCourse() != null) {
+                canvas.rotate((float) angle);
+            }
+            canvas.translate(-yb_left, -yb_top);
+            canvas.drawBitmap(bmp_doulj_yb, yb_left, yb_top, p);
 
             canvas.restore();
 
@@ -315,10 +347,15 @@ public class MyMeiChangMapView extends View {
 
     /**
      * 绘制叶轮机
+     * 478和239的区别
      */
     private void drawYelj(Canvas canvas, Paint p, List<MeiChangMapBean.YlListBean> yeljs, MeiChangMapBean.McBean mcBean) {
-        double yelCarWidth = (canvas.getWidth() - (((canvas.getWidth()) * 0.0388802488335925) + (239) / jspAngle)) / 15;
+        double yelCarWidth = (canvas.getWidth() + Math.abs(canvas.getWidth() - 643) - ((canvas.getWidth() + Math.abs(canvas.getWidth() - 643)) * 0.0388802488335925 + bg_height / jspAngle)) / 15;
+        double yelTrainWidth = yelCarWidth;
+
         double yelCarHeight = yelCarWidth / jspAngle;
+        double yelTrainHeight = yelCarHeight;
+        Log.e("tag", "yelCarWidth=" + yelCarWidth + ",yelCarHeigh=t" + yelCarHeight);
         for (MeiChangMapBean.YlListBean yelj : yeljs) {
             if (yelj.getFLAG() == 1) {
                 bmp_ylj = getImageFromAssetsFile("home/yelj/ylj_lv.png");
@@ -330,16 +367,46 @@ public class MyMeiChangMapView extends View {
             if ("汽车沟".equals(yelj.getYARD())) {
                 double width = yelCarWidth * 14 / yelj.getWIDTH() * yelj.getLOCATION_X();
                 //此处的网页端代码没看懂，暂时搁置
-//                if (yelj.getFLAG()==1){
-//                    if (width+)
-//                }
+                if (yelj.getFLAG() == 1) {
+                    if ((width + isMultiple * 10) <= yelj.getWIDTH()) {
+                        width = width + isMultiple * 10;
+                    }
+                }
+
 
                 double height = (yelCarHeight * jspAngle / yelj.getHEIGHT()) * yelj.getLOCATION_Y();
+                if (height > yelCarHeight / 2) {
 
-                canvas.drawBitmap(bmp_ylj, (float) width, (float) height+distanceHeight/2, p);
+//                    bmp_ylj.setWidth((int) yelCarWidth);
+//                    bmp_ylj.setHeight((int) yelCarHeight / 2);
+                    canvas.drawBitmap(bmp_ylj, (float) (width + carLeft), (float) (distanceHeight + bg_height - height), p);
+                } else {
+//                    bmp_ylj.setWidth((int) yelCarWidth);
+//                    bmp_ylj.setHeight((int) yelCarHeight / 2);
+                    canvas.drawBitmap(bmp_ylj, (float) (width + carLeft), (float) (yelCarHeight / 2 + distanceHeight + bg_height - height), p);
+
+                }
+
             }
             if ("火车沟".equals(yelj.getYARD())) {
+                double width = (yelTrainWidth * 14 / yelj.getWIDTH()) * yelj.getLOCATION_X();
+                if (yelj.getFLAG() == 1) {
+                    if ((width + isMultiple * 10) <= yelj.getWIDTH()) {
+                        width = width + isMultiple * 10;
+                    }
+                }
+                double height = (yelCarHeight * jspAngle / yelj.getHEIGHT()) * yelj.getLOCATION_Y();
+                if (height > yelCarHeight / 2) {
 
+//                    bmp_ylj.setWidth((int) yelCarWidth);
+//                    bmp_ylj.setHeight((int) yelCarHeight / 2);
+                    canvas.drawBitmap(bmp_ylj, (float) (width + TrainLeft), (float) (distanceHeight), p);
+                } else {
+//                    bmp_ylj.setWidth((int) yelCarWidth);
+//                    bmp_ylj.setHeight((int) yelCarHeight / 2);
+                    canvas.drawBitmap(bmp_ylj, (float) (width + TrainLeft), (float) (distanceHeight - height * 3 / 2), p);
+
+                }
             }
         }
 
